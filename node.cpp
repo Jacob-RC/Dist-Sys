@@ -16,7 +16,9 @@ enum class MessageType {
     NEW_ENTRY_ACK,
     COMMIT,
     LEADER_NEW_ENTRY,
-    RUN_ELECTION,
+    REQUEST_VOTES,
+    ELECTION_RESPONSE,
+    ELECTION_RESULT,
 };
 
 struct msg{
@@ -50,6 +52,7 @@ class node {
         std::vector<node *> neighbors;
         std::unordered_map<int, log_entry> staged_entry;
         int leader_idx;
+        int voted_for;
 
         void run(){
             
@@ -89,6 +92,10 @@ class node {
                         if(recieved_msg.message.term_idx > current_term){
                             current_term = recieved_msg.message.term_idx;
                         }
+                        else if (recieved_msg.message.term_idx < current_term){
+                            // Ignore requests from a stale term_idx
+                            return;
+                        }
 
                         // Find which node sent the message
                         int response_id = recieved_msg.sender_id;
@@ -117,9 +124,28 @@ class node {
                         }
                     }
                     else if (packet_type == MessageType::NEW_ENTRY_ACK && is_leader){
+
                         log_entry broadcoast_log = {latest_LSN++, current_term, recieved_msg.message.entry_data};
                         new_log_entry(recieved_msg.message);
                         message_sent = true;
+
+                    }
+                    else if (packet_type == MessageType::REQUEST_VOTES){
+
+                        bool res = request_vote_impl(recieved_msg.message);
+
+                        // Send back the acknowledge that we voted for the candidate
+                        if(res){
+                            voted_for = recieved_msg.sender_id;
+
+                            // Craft response packet
+                            log_entry response = {0,0,"ElectionBallot"};
+                            msg packet = {response, MessageType::ELECTION_RESPONSE, node_id, std::chrono::steady_clock::now()};
+
+                            // send the response
+                            node * responder = neighbors[recieved_msg.sender_id];
+                            responder->recieve_message(packet);
+                        }
                     }
                     else {
                         // Do nothing (message type was unused)
@@ -131,6 +157,7 @@ class node {
 
 
                 if(is_leader){
+
                     //Need to send a heartbeat then
                     if(!message_sent){
                         log_entry heartbeat = {latest_LSN, current_term, ""};
@@ -190,9 +217,70 @@ class node {
 
         void run_election(){
             int vote_count = 1; //1 vote because the node votes for itself
+
+            log_entry data;
+            
+            if(!log.empty()){
+                data = log.back();
+            }
+            else {
+                data = {latest_LSN, current_term, ""};
+            }
+
+            msg packet = {data, MessageType::REQUEST_VOTES, node_id, std::chrono::steady_clock::now()};
+
+            send_to_all_neighbors(packet);
+
+            // Allow all the threads to "respond"
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+            for(msg & recieved_message : mailbox){
+                if(recieved_message.msg_type == MessageType::ELECTION_RESPONSE){
+                    vote_count++;
+                }
+            }
+            
+            // More than a majority have responded, we are now leader
+            if(vote_count > (neighbors.size() / 2)){
+                is_leader = true;
+
+            }
+
         }
 
-        int request_vote(){
+        bool request_vote_impl(log_entry & new_message){
+
+            // Already voted this election cycle
+            if(voted_for != -1){
+                return false;
+            }
+
+            // Don't elect an out of date node
+            if(new_message.term_idx < current_term){
+                return false;
+            }
+
+            // Update current term
+            if(new_message.term_idx > current_term){
+                current_term = new_message.term_idx;
+            }
+
+            // Check if the candidates log is out of date
+            if(!log.empty()){
+
+                // Check if current index is greater than the candidates
+                if(latest_LSN > new_message.index){
+                    return false;
+                }
+
+                // Check if current term is later than the new message idx
+                if(current_term > new_message.term_idx){
+                    return false;
+                }
+            }
+
+            // give the candidate the vote
+            return true;
 
         }
 
@@ -204,7 +292,7 @@ class node {
             }
         }
 
-        inline void recieve_message(msg & recived_msg){
+        inline void recieve_message(msg recived_msg){
             std::lock_guard<std::mutex> lock(mailbox_mutex);
             mailbox.push_back(recived_msg);
         }
