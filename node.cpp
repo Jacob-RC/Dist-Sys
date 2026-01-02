@@ -147,6 +147,14 @@ class node {
                             responder->recieve_message(packet);
                         }
                     }
+                    else if(packet_type == MessageType::ELECTION_RESULT){
+                        // Reset who voted for
+                        voted_for = -1;
+                        is_leader = false;
+                        leader_idx = recieved_msg.sender_id;
+                        current_term++;
+
+                    }
                     else {
                         // Do nothing (message type was unused)
                     }
@@ -218,6 +226,9 @@ class node {
         void run_election(){
             int vote_count = 1; //1 vote because the node votes for itself
 
+            // Ensure no duplicate votes
+            voted_for = node_id;
+
             log_entry data;
             
             if(!log.empty()){
@@ -243,8 +254,18 @@ class node {
             // More than a majority have responded, we are now leader
             if(vote_count > (neighbors.size() / 2)){
                 is_leader = true;
+                leader_idx = node_id;
 
+                // Reuse the packet to inform all nodes that the current node is the new leader
+                packet.msg_type = MessageType::ELECTION_RESULT;
+                send_to_all_neighbors(packet);
+
+                // Update current term
+                current_term++;
             }
+
+            // reset who voted for
+            voted_for = -1;
 
         }
 
@@ -303,6 +324,7 @@ class node {
             latest_LSN = 0;
             current_term = 0;
             leader_idx = -1; // no leader right now
+            voted_for = -1;
             int random_offset = std::rand() % 10;
             random_offset *= 10;
             timeout = std::chrono::milliseconds(300 + random_offset);
