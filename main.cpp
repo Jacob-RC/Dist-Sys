@@ -17,15 +17,22 @@ int main(){
     }
 
     for(int i = 0; i < 10; i++){
-        node_threads.emplace_back(&node::run, nodes[i], std::ref(nodes));
+        node_threads.emplace_back(&node::run, nodes[i]);
     }
+    nodes[0]->run_election();
 
     // Run the simulation for 5 seconds
     std::this_thread::sleep_for(std::chrono::seconds(5));
 
     // stop simulation
     for(node * node_ptr : nodes) node_ptr->alive = false; 
-    for(std::thread& thread : node_threads) thread.join();
+
+    int index = 0;
+    for(std::thread& thread : node_threads){
+        thread.join();
+        std::cout << "Node " << index << " closed " << std::endl;
+        index++;
+    }    
     
     // Verify simulation logic - check log consistency across all nodes
     std::cout << "\n=== Log Consistency Check ===" << std::endl;

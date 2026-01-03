@@ -21,17 +21,17 @@ enum class MessageType {
     ELECTION_RESULT,
 };
 
+struct log_entry {
+    int index;
+    int term_idx;
+    std::string entry_data;
+};
+
 struct msg{
     log_entry message;
     MessageType msg_type;
     int sender_id;
     std::chrono::_V2::steady_clock::time_point timestamp;
-};
-
-struct log_entry {
-    int index;
-    int term_idx;
-    std::string entry_data;
 };
 
 class node {
@@ -78,9 +78,12 @@ class node {
                 // Handle message recieve logic
                 while(!mailbox.empty()){
 
-                    std::lock_guard<std::mutex> lock (mailbox_mutex);
-                    msg recieved_msg = mailbox.front();
-                    mailbox.pop_front();
+                    msg recieved_msg;
+                    {
+                        std::lock_guard<std::mutex> lock (mailbox_mutex);
+                        recieved_msg = mailbox.front();
+                        mailbox.pop_front();
+                    }
 
                     int recieved_idx = recieved_msg.message.index;
                     MessageType packet_type = recieved_msg.msg_type;
@@ -94,6 +97,7 @@ class node {
                         }
                         else if (recieved_msg.message.term_idx < current_term){
                             // Ignore requests from a stale term_idx
+                            std::cout << "Ignored stale entry " << std::endl;
                             return;
                         }
 
@@ -121,6 +125,9 @@ class node {
 
                             // Finally commit the log into internal storage.
                             log.push_back(fin_msg);
+                        }
+                        else{
+                            log.push_back(recieved_msg.message);
                         }
                     }
                     else if (packet_type == MessageType::NEW_ENTRY_ACK && is_leader){
@@ -153,7 +160,7 @@ class node {
                         is_leader = false;
                         leader_idx = recieved_msg.sender_id;
                         current_term++;
-
+                        std::cout << "Follower node current term: " << current_term << std::endl;
                     }
                     else {
                         // Do nothing (message type was unused)
@@ -168,7 +175,7 @@ class node {
 
                     //Need to send a heartbeat then
                     if(!message_sent){
-                        log_entry heartbeat = {latest_LSN, current_term, ""};
+                        log_entry heartbeat = {latest_LSN++, current_term, "Heartbeat"};
                         new_log_entry(heartbeat);
                     }
                 }
@@ -200,6 +207,7 @@ class node {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
             
             // Count the number of responses given
+            std::lock_guard<std::mutex> lock(mailbox_mutex);
             int num_acknowledgements = 0;
             for(msg & recieved_message : mailbox){
                 if(recieved_message.msg_type == MessageType::NEW_ENTRY_ACK){
@@ -213,6 +221,9 @@ class node {
                 // Commit the messages to all nodes
                 msg new_message = {new_log_entry, MessageType::COMMIT, node_id, std::chrono::steady_clock::now()};
                 send_to_all_neighbors(new_message);
+
+                //Add the new log to our own log
+                log.push_back(new_log_entry);
 
             }
             else {
@@ -245,6 +256,7 @@ class node {
             // Allow all the threads to "respond"
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
+            std::lock_guard<std::mutex> lock(mailbox_mutex);
             for(msg & recieved_message : mailbox){
                 if(recieved_message.msg_type == MessageType::ELECTION_RESPONSE){
                     vote_count++;
@@ -259,9 +271,11 @@ class node {
                 // Reuse the packet to inform all nodes that the current node is the new leader
                 packet.msg_type = MessageType::ELECTION_RESULT;
                 send_to_all_neighbors(packet);
+                std::cout << "Node " << node_id << "became leader " << std::endl;
 
                 // Update current term
                 current_term++;
+                std::cout << "Leader node current term: " << current_term << std::endl;
             }
 
             // reset who voted for
