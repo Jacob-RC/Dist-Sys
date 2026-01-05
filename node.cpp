@@ -98,6 +98,8 @@ class node {
                         else if (recieved_msg.message.term_idx < current_term){
                             // Ignore requests from a stale term_idx
                             std::cout << "Ignored stale entry " << std::endl;
+                            std::cout << "Current message term: " << current_term;
+                            std::cout << " Recieved message term: " << recieved_msg.message.term_idx << std::endl;
                             return;
                         }
 
@@ -106,7 +108,7 @@ class node {
                         node * responder = neighbors[response_id];
 
                         //Craft the response
-                        log_entry new_log = {recieved_idx, -1, "Acknowledge New Log Entry"};
+                        log_entry new_log = {recieved_idx, current_term, "Acknowledge New Log Entry"};
                         msg new_msg = {new_log, MessageType::NEW_ENTRY_ACK, node_id, std::chrono::steady_clock::now()};
 
                         // Send the message
@@ -131,11 +133,7 @@ class node {
                         }
                     }
                     else if (packet_type == MessageType::NEW_ENTRY_ACK && is_leader){
-
-                        log_entry broadcoast_log = {latest_LSN++, current_term, recieved_msg.message.entry_data};
-                        new_log_entry(recieved_msg.message);
-                        message_sent = true;
-
+                        
                     }
                     else if (packet_type == MessageType::REQUEST_VOTES){
 
@@ -268,13 +266,13 @@ class node {
                 is_leader = true;
                 leader_idx = node_id;
 
+                current_term++;
                 // Reuse the packet to inform all nodes that the current node is the new leader
                 packet.msg_type = MessageType::ELECTION_RESULT;
                 send_to_all_neighbors(packet);
                 std::cout << "Node " << node_id << "became leader " << std::endl;
 
                 // Update current term
-                current_term++;
                 std::cout << "Leader node current term: " << current_term << std::endl;
             }
 
